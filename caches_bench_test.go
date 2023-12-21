@@ -12,7 +12,9 @@ import (
 
 	"github.com/allegro/bigcache/v2"
 	"github.com/coocood/freecache"
+	"github.com/elastic/go-freelru"
 	cmap "github.com/orcaman/concurrent-map/v2"
+	"github.com/zeebo/xxh3"
 )
 
 const maxEntrySize = 256
@@ -83,6 +85,18 @@ func SyncMapSet[T any](cs constructor[T], b *testing.B) {
 	}
 }
 
+func FreeLRUSet[T any](cs constructor[T], b *testing.B) {
+	m, _ := freelru.New[string, T](maxEntryCount, hashString)
+
+	id := rand.Intn(maxEntryCount)
+	for i := 0; i < b.N; i++ {
+		if id >= maxEntryCount {
+			id = 0
+		}
+		m.Add(keys[id], cs.Get(id))
+	}
+}
+
 func OracamanMapSet[T any](cs constructor[T], b *testing.B) {
 	m := cmap.New[T]()
 
@@ -129,6 +143,10 @@ func BenchmarkSyncMapSetForStruct(b *testing.B) {
 	SyncMapSet[myStruct](structConstructor{}, b)
 }
 
+func BenchmarkFreeLRUSetForStruct(b *testing.B) {
+	FreeLRUSet[myStruct](structConstructor{}, b)
+}
+
 func BenchmarkOracamanMapSetForStruct(b *testing.B) {
 	OracamanMapSet[myStruct](structConstructor{}, b)
 }
@@ -147,6 +165,10 @@ func BenchmarkMapSetForBytes(b *testing.B) {
 
 func BenchmarkSyncMapSetForBytes(b *testing.B) {
 	SyncMapSet[[]byte](byteConstructor{}, b)
+}
+
+func BenchmarkFreeLRUSetForBytes(b *testing.B) {
+	FreeLRUSet[[]byte](byteConstructor{}, b)
 }
 
 func BenchmarkOracamanMapSetForBytes(b *testing.B) {
@@ -199,6 +221,28 @@ func SyncMapGet[T any](cs constructor[T], b *testing.B) {
 		e, ok := m.Load(keys[id])
 		if ok {
 			_ = (T)(e.(T))
+			hitCounter++
+		}
+	}
+}
+
+func FreeLRUGet[T any](cs constructor[T], b *testing.B) {
+	b.StopTimer()
+	m, _ := freelru.New[string, T](maxEntryCount, hashString)
+	for n := 0; n < maxEntryCount; n++ {
+		m.Add(keys[n], cs.Get(n))
+	}
+	b.StartTimer()
+
+	hitCounter := 0
+	id := rand.Intn(maxEntryCount)
+	for i := 0; i < b.N; i++ {
+		if id >= maxEntryCount {
+			id = 0
+		}
+		e, ok := m.Get(keys[id])
+		if ok {
+			_ = (T)(e)
 			hitCounter++
 		}
 	}
@@ -278,6 +322,10 @@ func BenchmarkSyncMapGetForStruct(b *testing.B) {
 	SyncMapGet[myStruct](structConstructor{}, b)
 }
 
+func BenchmarkFreeLRUGetForStruct(b *testing.B) {
+	FreeLRUGet[myStruct](structConstructor{}, b)
+}
+
 func BenchmarkOracamanMapGetForStruct(b *testing.B) {
 	OracamanMapGet[myStruct](structConstructor{}, b)
 }
@@ -296,6 +344,10 @@ func BenchmarkMapGetForBytes(b *testing.B) {
 
 func BenchmarkSyncMapGetForBytes(b *testing.B) {
 	SyncMapGet[[]byte](byteConstructor{}, b)
+}
+
+func BenchmarkFreeLRUGetForBytes(b *testing.B) {
+	FreeLRUGet[[]byte](byteConstructor{}, b)
 }
 
 func BenchmarkOracamanMapGetForBytes(b *testing.B) {
@@ -322,6 +374,22 @@ func SyncMapSetParallel[T any](cs constructor[T], b *testing.B) {
 				id = 0
 			}
 			m.Store(parallelKey(threadID, id), cs.Get(id))
+		}
+	})
+}
+
+func FreeLRUSetParallel[T any](cs constructor[T], b *testing.B) {
+	m, _ := freelru.NewSynced[string, T](maxEntryCount, hashString)
+
+	var threadIDCount atomic.Int32
+
+	b.RunParallel(func(pb *testing.PB) {
+		threadID := int(threadIDCount.Add(1)) - 1
+		for id := rand.Intn(maxEntryCount); pb.Next(); id++ {
+			if id >= maxEntryCount {
+				id = 0
+			}
+			m.Add(parallelKey(threadID, id), cs.Get(id))
 		}
 	})
 }
@@ -380,6 +448,10 @@ func BenchmarkSyncMapSetParallelForStruct(b *testing.B) {
 	SyncMapSetParallel[myStruct](structConstructor{}, b)
 }
 
+func BenchmarkFreeLRUSetParallelForStruct(b *testing.B) {
+	FreeLRUSetParallel[myStruct](structConstructor{}, b)
+}
+
 func BenchmarkOracamanMapSetParallelForStruct(b *testing.B) {
 	OracamanMapSetParallel[myStruct](structConstructor{}, b)
 }
@@ -394,6 +466,10 @@ func BenchmarkBigCacheSetParallelForStruct(b *testing.B) {
 
 func BenchmarkSyncMapSetParallelForBytes(b *testing.B) {
 	SyncMapSetParallel[[]byte](byteConstructor{}, b)
+}
+
+func BenchmarkFreeLRUSetParallelForBytes(b *testing.B) {
+	FreeLRUSetParallel[[]byte](byteConstructor{}, b)
 }
 
 func BenchmarkOracamanMapSetParallelForBytes(b *testing.B) {
@@ -424,6 +500,27 @@ func SyncMapGetParallel[T any](cs constructor[T], b *testing.B) {
 			e, ok := m.Load(keys[id])
 			if ok {
 				_ = (T)(e.(T))
+			}
+		}
+	})
+}
+
+func FreeLRUGetParallel[T any](cs constructor[T], b *testing.B) {
+	b.StopTimer()
+	m, _ := freelru.NewSynced[string, T](maxEntryCount, hashString)
+	for i := 0; i < maxEntryCount; i++ {
+		m.Add(keys[i], cs.Get(i))
+	}
+	b.StartTimer()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for id := rand.Intn(maxEntryCount); pb.Next(); id++ {
+			if id >= maxEntryCount {
+				id = 0
+			}
+			e, ok := m.Get(keys[id])
+			if ok {
+				_ = (T)(e)
 			}
 		}
 	})
@@ -494,6 +591,10 @@ func BenchmarkSyncMapGetParallelForStruct(b *testing.B) {
 	SyncMapGetParallel[myStruct](structConstructor{}, b)
 }
 
+func BenchmarkFreeLRUGetParallelForStruct(b *testing.B) {
+	FreeLRUGetParallel[myStruct](structConstructor{}, b)
+}
+
 func BenchmarkOracamanMapGetParallelForStruct(b *testing.B) {
 	OracamanMapGetParallel[myStruct](structConstructor{}, b)
 }
@@ -508,6 +609,10 @@ func BenchmarkBigCacheGetParallelForStruct(b *testing.B) {
 
 func BenchmarkSyncMapGetParallelForBytes(b *testing.B) {
 	SyncMapGetParallel[[]byte](byteConstructor{}, b)
+}
+
+func BenchmarkFreeLRUGetParallelForBytes(b *testing.B) {
+	FreeLRUGetParallel[[]byte](byteConstructor{}, b)
 }
 
 func BenchmarkOracamanMapGetParallelForBytes(b *testing.B) {
@@ -561,4 +666,8 @@ func initBigCache(entriesInWindow int) *bigcache.BigCache {
 	})
 
 	return cache
+}
+
+func hashString(s string) uint32 {
+	return uint32(xxh3.HashString(s))
 }
